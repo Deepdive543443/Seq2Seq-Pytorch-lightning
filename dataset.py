@@ -2,7 +2,7 @@ import torch
 from torchtext.datasets import Multi30k
 from torch.utils.data import Dataset, DataLoader
 from collections import Counter
-import re
+import re, random
 from torch.nn.utils.rnn import pad_sequence
 
 class en_de_dataset(Dataset):
@@ -14,17 +14,17 @@ class en_de_dataset(Dataset):
         sen2_token = []
         sentences_pair = Multi30k(split=(split), language_pair=('en', 'de'))
 
-
         self.length = 0
         self.inputs = []
         self.targets = []
 
         for input_sen, target_sen in sentences_pair:
-            self.length += 1
-            self.inputs.append(input_sen)
-            self.targets.append(target_sen)
-            sen1_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sen.lower())
-            sen2_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_sen)
+            if len(input_sen) > 0 and len(target_sen) > 0:
+                self.length += 1
+                self.inputs.append(input_sen)
+                self.targets.append(target_sen)
+                sen1_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sen.lower())
+                sen2_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_sen.lower())
 
         if input_vocab is None:
             self.input_vocab = Counter(sen1_token)
@@ -45,76 +45,84 @@ class en_de_dataset(Dataset):
         print(f"Input vocab size: {len(self.input_vocab)}")
         print(f"Target vocab size: {len(self.target_vocab)}")
 
+    def random_pairs(self):
+        pair_idx = random.randint(0, len(self.inputs))
+        return self.inputs[pair_idx], self.targets[pair_idx]
+
     def __len__(self):
         return self.length
 
     def __getitem__(self, item):
         input_indice = []
-        target_indice = []
+        target_indice = [1]
         for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.inputs[item].lower()):
             try:
                 input_indice.append(self.input_vocab[token])
             except:
                 input_indice.append(self.input_vocab['<unk>'])
 
-        for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.targets[item]):
+        for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.targets[item].lower()):
             try:
                 target_indice.append(self.target_vocab[token])
             except:
                 target_indice.append(self.target_vocab['<unk>'])
 
+        target_indice.append(2)
         return torch.LongTensor(input_indice).unsqueeze(1), torch.LongTensor(target_indice).unsqueeze(1)
 
 def collate_fn_padding(batch):
     # Each item in batch (input, target)
     inputs_batch = []
     target_batch = []
+    teaching_batch = []
     for input, target in batch:
         inputs_batch.append(input)
-        target_batch.append(target)
+        target_batch.append(target[1:])
+        teaching_batch.append(target[:-1])
 
     # Merge list of sentences into a batch with padding
     batch_inputs = pad_sequence(inputs_batch, padding_value=0).permute(1, 0, 2).squeeze(-1)
     batch_target = pad_sequence(target_batch, padding_value=0).permute(1, 0, 2).squeeze(-1) # [seq, batch, unsqueezed]
+    batch_teaching = pad_sequence(teaching_batch, padding_value=0).permute(1, 0, 2).squeeze(-1)
 
     # mask for loss
     mask = torch.zeros_like(batch_target)
     mask[batch_target != 0] = 1
 
     # Transfer back to [batch, indice]
-    return batch_inputs, batch_target, mask
+    return batch_inputs, batch_target, batch_teaching, mask
 
 
 
 if __name__ == '__main__':
-    # batch_size = 2
-    # trainset = en_de_dataset(split='valid')
-    # train_loader = DataLoader(
-    #     dataset=trainset,
-    #     shuffle=False,
-    #     pin_memory=True,
-    #     batch_size=batch_size,
-    #     collate_fn=collate_fn_padding,
-    #     drop_last=True
-    # )
+    batch_size = 2
+    trainset = en_de_dataset(split='valid')
+    train_loader = DataLoader(
+        dataset=trainset,
+        shuffle=False,
+        pin_memory=True,
+        batch_size=batch_size,
+        collate_fn=collate_fn_padding,
+        drop_last=True
+    )
     # print(len(trainset))
     #
     # for idx, (input, target, mask) in enumerate(train_loader):
     #     print(input.shape, target.shape)
-    #     f = open("sample.txt", "a+", encoding='utf-8')
     #
     #     for idx, (sen1, sen2, mask) in enumerate(zip(input, target, mask)):
     #         sen1 = [trainset.id_to_word_input[int(word)] for word in sen1]
-    #         sen2 = [trainset.id_to_word_target[int(word)] for word in sen2]
+    #         sen2 = [trainset.id_to_word_target[int(word)] for word in sen2[1:]]
     #         print(f'{" ".join(sen1)}\n{" ".join(sen2)}\n\n')
     #
-    #         f.write(' '.join(sen1)+'\n')
-    #         f.write(' '.join(sen2)+'\n\n')
     #         if idx >= 50:
     #             break
-    #     f.close()
-    from config import args
-    string = ' '.join([str(k)+str(v) for k, v in args.items()])
-    print(string)
 
+    input_str, target_str = trainset.random_pairs()
+    print((input_str, target_str))
+    input_tokens = [trainset.input_vocab[token] for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_str.lower())]
+    target_tokens = [trainset.target_vocab[token] for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_str.lower())]
+    print(input_tokens, target_tokens)
+
+    print(torch.LongTensor([1]).unsqueeze(0).shape)
 

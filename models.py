@@ -1,15 +1,23 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import pytorch_lightning as pl
 from lightning.pytorch import LightningModule
+import re
 
 
 class RNNEncoder(nn.Module):
-    def __init__(self, vocab_size, embedding_size, layers, bidirection = False):
+    def __init__(self, vocab_size, embedding_size, layers, bidirection = False, rnn_type = 'GRU'):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, embedding_size)
-        self.rnn = nn.GRU(
+        if rnn_type == 'GRU':
+            self.rnn = nn.GRU(
+                    input_size=embedding_size,
+                    hidden_size=embedding_size,
+                    num_layers=layers,
+                    bidirectional=bidirection
+                )
+        else:
+            self.rnn = nn.LSTM(
                 input_size=embedding_size,
                 hidden_size=embedding_size,
                 num_layers=layers,
@@ -33,23 +41,28 @@ class RNNEncoder(nn.Module):
 
 
 class RNNDecoder(nn.Module):
-    def __init__(self, vocab_size, embedding_size, layers, num_attn_head):
+    def __init__(self, vocab_size, embedding_size, layers, num_attn_head, rnn_type = 'GRU'):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, embedding_size)
-        self.rnn = nn.GRU(
-            input_size=embedding_size,
-            hidden_size=embedding_size,
-            num_layers=layers
-        )
+        if rnn_type == 'GRU':
+            self.rnn = nn.GRU(
+                input_size=embedding_size,
+                hidden_size=embedding_size,
+                num_layers=layers
+            )
+        else:
+            self.rnn = nn.LSTM(
+                input_size=embedding_size,
+                hidden_size=embedding_size,
+                num_layers=layers,
+            )
 
         self.attn = nn.MultiheadAttention(
             embed_dim=300,
             num_heads=num_attn_head,
         )
 
-        self.decode = nn.Sequential(
-            nn.Linear(embedding_size, vocab_size)
-        )
+        self.decode = nn.Linear(embedding_size, vocab_size)
 
 
 
@@ -68,6 +81,7 @@ class RNNDecoder(nn.Module):
         return output
 
 
+
 class S2SPL(LightningModule):
     def __init__(
             self,
@@ -79,13 +93,19 @@ class S2SPL(LightningModule):
             vocab_size_decoder,
             decoder_layers,
             attn_head,
+            encoder_type,
+            decoder_type,
 
             learning_rate,
+            input_vocab,
+            target_vocab,
             input_id_to_word,
             target_id_to_word
     ):
         super().__init__()
         self.lr = learning_rate
+        self.input_vocab = input_vocab
+        self.target_vocab = target_vocab
         self.input_id_to_word = input_id_to_word
         self.target_id_to_word = target_id_to_word
 
@@ -94,69 +114,144 @@ class S2SPL(LightningModule):
             vocab_size=vocab_size_encoder,
             embedding_size=emb_dim,
             layers=encoder_layers,
-            bidirection=bidirection
+            bidirection=bidirection,
+            rnn_type=encoder_type
         )
         # Decoder
         self.decoder = RNNDecoder(
             vocab_size=vocab_size_decoder,
             embedding_size=emb_dim,
             layers=decoder_layers,
-            num_attn_head=attn_head
+            num_attn_head=attn_head,
+            rnn_type=decoder_type
         )
         # Loss function
         self.cross_entrophy = nn.CrossEntropyLoss()
 
         #Log
 
+        # Check point
+        self.save_hyperparameters()
+
     def forward(self, x, y):
         output_enc, hidden_state = self.encoder(x)
-
-        start_of_seq = torch.ones((y.shape[0],1)).to('cuda')
-        output_dec = self.decoder(torch.cat([start_of_seq,y], dim=1).long(), output_enc, hidden_state)
+        output_dec = self.decoder(y, output_enc, hidden_state)
         return output_dec
 
-    def compute_loss(self, inputs, targets, masks):
-        outputs = self.forward(inputs, targets)
-
-        end_of_seq = (torch.ones((targets.shape[0], 1)) * 2).to('cuda')
-        loss = self.cross_entrophy(outputs.permute(1, 2, 0), torch.cat([targets, end_of_seq], dim=1).long()) * masks
+    def compute_loss(self, inputs, targets, teaching, masks):
+        outputs = self.forward(inputs, teaching)
+        loss = self.cross_entrophy(outputs.permute(1, 2, 0), targets) * masks
         loss = loss.sum() / torch.sum(masks).item()
         return loss, outputs
+
+    def recursive(self, x, max_seq_length=20):
+        output_enc, hidden_state = self.encoder(x)
+        # Recursive Decoder output
+        output_dec = []
+        seq_length = 0
+
+        # send in the <start_of_seq>
+        start_of_seq = torch.ones(x.shape[0], 1).long()
+        start_of_seq = start_of_seq.to(self.device)
+        start_of_seq = self.decoder.emb(start_of_seq)
+        output_seq, hidden_state = self.decoder.rnn(start_of_seq, hidden_state)
+        output_dec.append(output_seq)
+
+        while len(output_dec) < max_seq_length:
+            output_seq, hidden_state = self.decoder.rnn(output_seq, hidden_state)
+            output_dec.append(output_seq)
+            seq_length += 1
+
+        output = torch.cat(output_dec, dim=0)
+        output, _ = self.decoder.attn(output, output_enc, output_enc)
+        output = self.decoder.decode(output)
+
+        return output
+
+    def compute_loss_recursive(self, inputs, targets, masks):
+        outputs = self.recursive(inputs, max_seq_length=targets.shape[1])
+        # print(f"Max sequence lengthL {targets.shape[1]}   Output shape: {outputs.permute(1, 2, 0).shape}")
+        loss = self.cross_entrophy(outputs.permute(1, 2, 0), targets) * masks
+        loss = loss.sum() / torch.sum(masks).item()
+        return loss, outputs
+
+
+
+    def translate(self, input_sentence, max_seq_length=20):
+        # Transfer input string to indice
+        input_indice = []
+        for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()):
+            try:
+                input_indice.append(self.input_vocab[token])
+            except:
+                input_indice.append(3)
+        print(re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()))
+        print(input_indice)
+        # Transfer indice to LongTensor with batch dimension shape: [1, seq]
+        input_tokens = torch.LongTensor(input_indice).unsqueeze(0)
+        with torch.no_grad():
+            output_enc, hidden_state = self.encoder(input_tokens)
+            # Recursive Decoder output
+            output_dec = []
+            seq_length = 0
+
+            # send in the <start_of_seq>
+            start_of_seq = torch.LongTensor([1]).unsqueeze(0)
+            start_of_seq = self.decoder.emb(start_of_seq)
+            output_seq, hidden_state = self.decoder.rnn(start_of_seq, hidden_state)
+            output_dec.append(output_seq)
+
+            # Getting remaining output by recursive
+            while seq_length < max_seq_length:
+                output_seq, hidden_state = self.decoder.rnn(output_seq, hidden_state)
+                output_dec.append(output_seq)
+                seq_length += 1
+            output = torch.cat(output_dec, dim=0)
+            output, _ = self.decoder.attn(output, output_enc, output_enc)
+            output = self.decoder.decode(output)
+
+            # decoder to output sentences
+            output = torch.argmax(output, dim=2).T.squeeze(0)
+            output = [self.target_id_to_word[int(i)] for i in output]
+
+        return output
+
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(params=self.parameters(), lr=self.lr)
         return optimizer
 
     def training_step(self, train_batch, batch_idx):
-        inputs, targets, masks = train_batch
-        loss, _ = self.compute_loss(inputs, targets, masks)
+        inputs, targets, teaching, masks = train_batch
+        loss, _ = self.compute_loss(inputs, targets, teaching, masks)
         self.log('train_loss', loss, on_step=False ,on_epoch=True)
         return loss
 
     def validation_step(self, val_batch, batch_idx):
-        inputs, targets, masks = val_batch
-        loss, outputs = self.compute_loss(inputs, targets, masks)
-        if batch_idx == 0:
-            f = open("sample.txt", "a+", encoding='utf-8')
-            f.write(f'Batch: {batch_idx}\n')
-            outputs = torch.argmax(outputs, dim=2).T
-            for idx, (output, target) in enumerate(zip(outputs, targets)):
-
-                output_str = ' '.join([self.target_id_to_word[int(word)] for word in output])
-                target_str = ' '.join([self.target_id_to_word[int(word)] for word in target])
-
-                f.write(f'{output_str}\n{target_str}\n\n')
-                if idx >= 60:
-                    break
-            f.close()
+        inputs, targets, teaching, masks = val_batch
+        loss, outputs = self.compute_loss_recursive(inputs, targets, masks)
         self.log('valid_loss', loss, on_step=False ,on_epoch=True)
 
+    def on_validation_end(self):
+        # if batch_idx == 0:
+        #     f = open("sample.txt", "a+", encoding='utf-8')
+        #     f.write(f'Batch: {batch_idx}\n')
+        #     outputs = torch.argmax(outputs, dim=2).T
+        #     for idx, (output, target) in enumerate(zip(outputs, targets)):
+        #
+        #         output_str = ' '.join([self.target_id_to_word[int(word)] for word in output])
+        #         target_str = ' '.join([self.target_id_to_word[int(word)] for word in target])
+        #
+        #         f.write(f'{output_str}\n{target_str}\n\n')
+        #         if idx >= 60:
+        #             break
+        #     f.close()
+        pass
+
     def test_step(self, test_batch, batch_idx):
-        inputs, targets, masks = test_batch
-        loss, output = self.compute_loss(inputs, targets, masks)
-
-        self.log('test_loss', loss)
-
+        inputs, targets, teaching, masks = test_batch
+        loss, outputs = self.compute_loss_recursive(inputs, targets, masks)
+        self.log('test_loss', loss, on_step=False, on_epoch=True)
 
 
 # 按间距中的绿色按钮以运行脚本。
@@ -183,6 +278,7 @@ if __name__ == '__main__':
     # loss = critic(output.permute(1, 0, 2), target)
 
     print(output.permute(1, 0, 2).shape, loss.shape, loss.mean(), torch.cat([target, start_of_seq], dim=1).long())
+
 
 
 
