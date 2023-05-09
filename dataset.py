@@ -6,13 +6,13 @@ import re, random
 from torch.nn.utils.rnn import pad_sequence
 
 class en_de_dataset(Dataset):
-    def __init__(self, split = 'train', input_vocab = None, target_vocab = None):
+    def __init__(self, split = 'train', pair =('en', 'de'), input_vocab = None, target_vocab = None):
         # special token used for
         special_vocab = ['<pad>', '<sos>', '<eos>', '<unk>']
 
         sen1_token = []
         sen2_token = []
-        sentences_pair = Multi30k(split=(split), language_pair=('en', 'de'))
+        sentences_pair = Multi30k(split=(split), language_pair=pair)
 
         self.length = 0
         self.inputs = []
@@ -86,8 +86,9 @@ def collate_fn_padding(batch):
     batch_teaching = pad_sequence(teaching_batch, padding_value=0).permute(1, 0, 2).squeeze(-1)
 
     # mask for loss
-    mask = torch.zeros_like(batch_target)
-    mask[batch_target != 0] = 1
+    # mask = torch.zeros_like(batch_target)
+    mask = batch_target != 0
+    # mask = mask.bool()
 
     # Transfer back to [batch, indice]
     return batch_inputs, batch_target, batch_teaching, mask
@@ -105,18 +106,20 @@ if __name__ == '__main__':
         collate_fn=collate_fn_padding,
         drop_last=True
     )
-    # print(len(trainset))
-    #
-    # for idx, (input, target, mask) in enumerate(train_loader):
-    #     print(input.shape, target.shape)
-    #
-    #     for idx, (sen1, sen2, mask) in enumerate(zip(input, target, mask)):
-    #         sen1 = [trainset.id_to_word_input[int(word)] for word in sen1]
-    #         sen2 = [trainset.id_to_word_target[int(word)] for word in sen2[1:]]
-    #         print(f'{" ".join(sen1)}\n{" ".join(sen2)}\n\n')
-    #
-    #         if idx >= 50:
-    #             break
+    print(len(trainset))
+
+    for idx, (input, target, teaching, masks) in enumerate(train_loader):
+        print(input.shape, target.shape)
+
+        for idx, (sen1, sen2, sen3, mask) in enumerate(zip(input, target, teaching, masks)):
+            sen1 = [trainset.id_to_word_input[int(word)] for word in sen1]
+            sen2 = [trainset.id_to_word_target[int(word)] for word in sen2]
+            sen3 = [trainset.id_to_word_target[int(word)] for word in sen3]
+            mask = [bool(m) for m in mask]
+            print(f'{" ".join(sen1)}\n{" ".join(sen2)}\n{" ".join(sen3)}\n{mask}\n\n')
+
+            if idx >= 50:
+                break
 
     input_str, target_str = trainset.random_pairs()
     print((input_str, target_str))

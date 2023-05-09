@@ -25,6 +25,9 @@ class RNNEncoder(nn.Module):
                 bidirectional=bidirection,
                 dropout=dropout
             )
+
+        self.relu = nn.ReLU()
+
         self.bidirection = bidirection
         if self.bidirection:
             self.linear = nn.Linear(embedding_size * 2, embedding_size)
@@ -38,7 +41,7 @@ class RNNEncoder(nn.Module):
         # Map to previous nums of features
         if self.bidirection:
             output = self.linear(output)
-        return output, hidden_state
+        return self.relu(output), hidden_state
 
 
 
@@ -61,10 +64,12 @@ class RNNDecoder(nn.Module):
                 dropout=dropout
             )
 
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden_side,
-            num_heads=num_attn_head,
-        )
+        self.relu = nn.ReLU()
+
+        # self.attn = nn.MultiheadAttention(
+        #     embed_dim=hidden_side,
+        #     num_heads=num_attn_head,
+        # )
 
         self.decode = nn.Linear(hidden_side, vocab_size)
 
@@ -78,10 +83,10 @@ class RNNDecoder(nn.Module):
         output, hidden_state = self.rnn(x, encoder_hidden_state)
 
         # Apply multihead_attn
-        output, weight = self.attn(output, encoder_output, encoder_output)
+        # output, weight = self.attn(output, encoder_output, encoder_output)
 
         # using linear layers mapping the features to vocab index
-        output = self.decode(output)
+        output = self.decode(self.relu(output))
         return output
 
 
@@ -125,7 +130,7 @@ class S2SPL(LightningModule):
             dropout=self.args['DROPOUT_DECODER']
         )
         # Loss function
-        self.cross_entrophy = nn.CrossEntropyLoss()
+        self.cross_entrophy = nn.CrossEntropyLoss(reduction='none')
 
         #Log
 
@@ -139,8 +144,8 @@ class S2SPL(LightningModule):
 
     def compute_loss(self, inputs, targets, teaching, masks):
         outputs = self.forward(inputs, teaching)
-        loss = self.cross_entrophy(outputs.permute(1, 2, 0), targets) * masks
-        loss = loss.sum() / torch.sum(masks).item()
+        loss = self.cross_entrophy(outputs.permute(1, 2, 0), targets)[masks]
+        loss = loss.mean() # / torch.sum(masks).item()
         return loss, outputs
 
     def recursive(self, x, max_seq_length=20):
@@ -164,7 +169,7 @@ class S2SPL(LightningModule):
         while len(output_dec) < max_seq_length:
             input_feature = self.decoder.emb(torch.argmax(output_indice, dim=2))
             output_feature, hidden_state = self.decoder.rnn(input_feature, hidden_state)
-            output_feature, _ = self.decoder.attn(output_feature, output_enc, output_enc)
+            # output_feature, _ = self.decoder.attn(output_feature, output_enc, output_enc)
             output_indice = self.decoder.decode(output_feature)
             output_dec.append(output_indice)
             seq_length += 1
@@ -180,8 +185,8 @@ class S2SPL(LightningModule):
         with torch.no_grad():
             outputs = self.recursive(inputs, max_seq_length=targets.shape[1])
             # print(f"Max sequence lengthL {targets.shape[1]}   Output shape: {outputs.permute(1, 2, 0).shape}")
-            loss = self.cross_entrophy(outputs.permute(1, 2, 0), targets) * masks
-            loss = loss.sum() / torch.sum(masks).item()
+            loss = self.cross_entrophy(outputs.permute(1, 2, 0), targets)[masks]
+            loss = loss.mean()# / torch.sum(masks).item()
         return loss, outputs
 
 
@@ -271,28 +276,76 @@ class S2SPL(LightningModule):
 
 # 按间距中的绿色按钮以运行脚本。
 if __name__ == '__main__':
-    encoder = RNNEncoder(3000, 300, 2, True)
-    input = torch.randint(low=0, high=2999, size=(3, 46))
+    from config import args
+    from dataset import en_de_dataset, collate_fn_padding
+    from torch.utils.data import DataLoader
+    trainset = en_de_dataset(split='train')
+    train_loader = DataLoader(
+        dataset=trainset,
+        shuffle=False,
+        pin_memory=True,
+        batch_size=2,
+        collate_fn=collate_fn_padding,
+        drop_last=True
+    )
 
-    # obtain the output and hidden state from encoder
-    encoder_output, encoder_hidden_state = encoder(input)
+    s2s_model = S2SPL(
+        vocab_size_encoder=len(trainset.input_vocab),
+        vocab_size_decoder=len(trainset.target_vocab),
 
-
-    # Define the Decoder
-    decoder = RNNDecoder(3000, 300, 4, 3)
-    target = torch.randint(low=0, high=2999, size=(3, 37))
-    start_of_seq = torch.ones((3, 1)) * 2
-    target_onehot = torch.zeros(3, 37, 3000)
-    output = decoder(target, encoder_output, encoder_hidden_state)
-
-
-    # Calculate loss
-    print(output.permute(1, 2, 0).shape)
+        input_vocab=trainset.input_vocab,
+        target_vocab=trainset.target_vocab,
+        input_id_to_word=trainset.id_to_word_input,
+        target_id_to_word=trainset.id_to_word_target,
+        args=args
+    )
     critic = nn.CrossEntropyLoss(reduction='none')
-    loss = critic(output.permute(1, 2, 0), target)
-    # loss = critic(output.permute(1, 0, 2), target)
+    # output = s2s_model.forward(
+    #     x = torch.randint(low=0, high=9, size=(3, 20)),
+    #     y = torch.randint(low=0, high=9, size=(3, 20))
+    # )
 
-    print(output.permute(1, 0, 2).shape, loss.shape, loss.mean(), torch.cat([target, start_of_seq], dim=1).long())
+    for idx, (input, target, teaching, masks) in enumerate(train_loader):
+        print(input.shape, target.shape)
+        for idx, (sen1, sen2, sen3, mask) in enumerate(zip(input, target, teaching, masks)):
+            sen1 = [trainset.id_to_word_input[int(word)] for word in sen1]
+            sen2 = [trainset.id_to_word_target[int(word)] for word in sen2]
+            sen3 = [trainset.id_to_word_target[int(word)] for word in sen3]
+            mask = [bool(m) for m in mask]
+            print(f'{" ".join(sen1)}\n{" ".join(sen2)}\n{" ".join(sen3)}\n{mask}\n\n')
+
+        output = s2s_model.forward(
+            x = input,
+            y = teaching
+        )
+
+        print(output.shape)
+        loss = critic(output.permute(1, 2, 0), target)
+        print(loss.shape)
+        print(loss)
+        print()
+
+        # First method
+        loss_masked = loss
+        loss_masked[~masks] = 0
+        print(loss_masked)
+        print(loss_masked.sum() / torch.sum(masks))
+        print()
+
+        # second
+        loss_index = loss[masks]
+        print(loss_index)
+        print(loss_index.mean())
+        break
+
+            # Second method
+            # Calculate loss
+            # print(output.permute(1, 2, 0).shape)
+            # critic = nn.CrossEntropyLoss(reduction='none')
+            # loss = critic(output.permute(1, 2, 0), target)
+            # # loss = critic(output.permute(1, 0, 2), target)
+            #
+            # print(output.permute(1, 0, 2).shape, loss.shape, loss.mean(), torch.cat([target, start_of_seq], dim=1).long())
 
 
 
