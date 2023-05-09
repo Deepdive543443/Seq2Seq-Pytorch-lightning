@@ -50,34 +50,42 @@ if __name__ == "__main__":
     # Initialize model parameters
     s2s_model = S2SPL(
         vocab_size_encoder=len(trainset.input_vocab),
-        emb_dim=args['EMB_DIM'],
-        encoder_layers=args['ENCODER_LAYERS'],
-        bidirection=args['BIDIRECTION'],
         vocab_size_decoder=len(trainset.target_vocab),
-        decoder_layers=args['DECODER_LAYERS'],
-        attn_head=args['ATTENTION_HEAD'],
-        learning_rate=args['LEARNING_RATE'],
-        encoder_type=args['ENCODER_TYPE'],
-        decoder_type=args['DECODER_TYPE'],
 
         input_vocab=trainset.input_vocab,
         target_vocab=trainset.target_vocab,
         input_id_to_word=trainset.id_to_word_input,
         target_id_to_word=trainset.id_to_word_target,
+        args=args
     )
 
     # Transfer model parameters to check point
     args_str = " ".join([str(k)+str(v) for k, v in args.items()])
+
+    #Saving best model on validation
     checkpoint_callback = ModelCheckpoint(
         save_top_k=2,
         monitor="valid_loss",
         mode="min",
         dirpath=f"best/{args_str}",
-        filename="-{epoch:02d}-{valid_loss:.2f}",
+        filename="-{epoch:02d}-{valid_loss:.2f}-validation",
+    )
+    # Saving best model on training
+    checkpoint_callback_train = ModelCheckpoint(
+        save_top_k=1,
+        monitor="train_loss",
+        mode="min",
+        dirpath=f"best/{args_str}",
+        filename="-{epoch:02d}-{train_loss:.2f}-training",
     )
 
     tb_logger = TensorBoardLogger("tb_logs/", name=f'{args_str}')
-    trainer = Trainer(precision=16, max_epochs=args['EPOCHS'], callbacks=[checkpoint_callback], logger=tb_logger)
+    # Saving config as json
+
+    # Training
+    trainer = Trainer(precision=16, max_epochs=args['EPOCHS'], callbacks=[checkpoint_callback, checkpoint_callback_train], logger=tb_logger)
     trainer.fit(s2s_model, train_loader, val_loader)
+
+    save_config_json(args, f"best/{args_str}")
 
 
