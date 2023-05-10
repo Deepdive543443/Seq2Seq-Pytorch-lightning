@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 from collections import Counter
 import re, random
 from torch.nn.utils.rnn import pad_sequence
+from utils import *
 
 class en_de_dataset(Dataset):
     def __init__(self, split = 'train', pair =('en', 'de'), input_vocab = None, target_vocab = None):
@@ -24,8 +25,10 @@ class en_de_dataset(Dataset):
                 self.length += 1
                 self.inputs.append(input_sen)
                 self.targets.append(target_sen)
-                sen1_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sen.lower())
-                sen2_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_sen.lower())
+                sen1_token += en_tokenizer(input_sen)#English_token(input_sen)
+                sen2_token += de_tokenizer(target_sen)#German_token(target_sen)
+                # sen1_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sen.lower())
+                # sen2_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_sen.lower())
 
         if input_vocab is None:
             self.input_vocab = Counter(sen1_token)
@@ -54,21 +57,22 @@ class en_de_dataset(Dataset):
         return self.length
 
     def __getitem__(self, item):
-        input_indice = []
+        input_indice = [1]
         target_indice = [1]
-        for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.inputs[item].lower()):
+        for token in en_tokenizer(self.inputs[item]):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.inputs[item].lower()):
             try:
                 input_indice.append(self.input_vocab[token])
             except:
                 input_indice.append(self.input_vocab['<unk>'])
 
-        for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.targets[item].lower()):
+        for token in de_tokenizer(self.targets[item]):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.targets[item].lower()):
             try:
                 target_indice.append(self.target_vocab[token])
             except:
                 target_indice.append(self.target_vocab['<unk>'])
 
         target_indice.append(2)
+        input_indice.append(2)
         return torch.LongTensor(input_indice).unsqueeze(1), torch.LongTensor(target_indice).unsqueeze(1)
 
 def collate_fn_padding(batch):
@@ -109,23 +113,22 @@ if __name__ == '__main__':
     )
     print(len(trainset))
 
-    for idx, (input, target, teaching, masks) in enumerate(train_loader):
+    for idx, (input, target, teaching) in enumerate(train_loader):
         print(input.shape, target.shape)
 
-        for idx, (sen1, sen2, sen3, mask) in enumerate(zip(input, target, teaching, masks)):
+        for idx, (sen1, sen2, sen3) in enumerate(zip(input, target, teaching)):
             sen1 = [trainset.id_to_word_input[int(word)] for word in sen1]
             sen2 = [trainset.id_to_word_target[int(word)] for word in sen2]
             sen3 = [trainset.id_to_word_target[int(word)] for word in sen3]
-            mask = [bool(m) for m in mask]
-            print(f'{" ".join(sen1)}\n{" ".join(sen2)}\n{" ".join(sen3)}\n{mask}\n\n')
+            print(f'{" ".join(sen1)}\n{" ".join(sen2)}\n{" ".join(sen3)}\n\n\n')
 
             if idx >= 50:
                 break
 
     input_str, target_str = trainset.random_pairs()
     print((input_str, target_str))
-    input_tokens = [trainset.input_vocab[token] for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_str.lower())]
-    target_tokens = [trainset.target_vocab[token] for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_str.lower())]
+    input_tokens = [trainset.input_vocab[token] for token in en_tokenizer(input_str)]#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_str.lower())]
+    target_tokens = [trainset.target_vocab[token] for token in de_tokenizer(target_str)]#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_str.lower())]
     print(input_tokens, target_tokens)
 
     print(torch.LongTensor([1]).unsqueeze(0).shape)

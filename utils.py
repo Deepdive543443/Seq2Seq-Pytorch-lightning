@@ -1,13 +1,16 @@
 from lightning.pytorch.callbacks import Callback
 # https://lightning.ai/docs/pytorch/stable/extensions/callbacks.html
 import json, os, sys
+from torchtext.data.utils import get_tokenizer
 
+en_tokenizer = get_tokenizer('spacy', language='en')
+de_tokenizer = get_tokenizer('spacy', language='de')
 
-def English_token():
-    pass
-
-def German_token():
-    pass
+# def English_token():
+#     return get_tokenizer('spacy', language='en')
+#
+# def German_token():
+#     return get_tokenizer('spacy', language='de')
 
 
 def beam_search():
