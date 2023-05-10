@@ -1,5 +1,6 @@
 import torch
 from torchtext.datasets import Multi30k
+from torchtext.data.utils import get_tokenizer
 from torch.utils.data import Dataset, DataLoader
 from collections import Counter
 import re, random

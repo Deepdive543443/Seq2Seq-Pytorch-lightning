@@ -6,10 +6,18 @@ from torch.utils.data import Dataset, DataLoader
 from dataset import en_de_dataset, collate_fn_padding
 from config import args
 from lightning.pytorch.loggers import TensorBoardLogger
+from tensorboard import program
+
+
 
 if __name__ == "__main__":
+    tb = program.TensorBoard()
+    tb.configure(argv=[None, '--logdir', 'tb_logs'])
+    url = tb.launch()
+    print(f"Tensorflow listening on {url}")
+
     # Initial Dataset
-    trainset = en_de_dataset(split='train')
+    trainset = en_de_dataset(split='train', pair=args['PAIR'])
     valset = en_de_dataset(
         split='valid',
         input_vocab=trainset.input_vocab,

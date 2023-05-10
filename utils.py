@@ -13,7 +13,8 @@ def German_token():
 def beam_search():
     pass
 
-def target_n_teach():
+def target_2_teach(targets):
+    pad_mask = targets == 2
     pass
 
 def save_config_json(args, path):

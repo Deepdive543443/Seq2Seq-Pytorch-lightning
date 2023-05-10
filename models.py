@@ -127,7 +127,7 @@ class S2SPL(LightningModule):
             bidirection=self.args['BIDIRECTION'],
             rnn_type=self.args['ENCODER_TYPE'],
             dropout=self.args['DROPOUT_ENCODER']
-        )
+        ).to(self.args['DEVICE'])
         # Decoder
         self.decoder = RNNDecoder(
             vocab_size=vocab_size_decoder,
@@ -138,7 +138,7 @@ class S2SPL(LightningModule):
             rnn_type=self.args['DECODER_TYPE'],
             dropout=self.args['DROPOUT_DECODER'],
             device=self.args['DEVICE']
-        )
+        ).to(self.args['DEVICE'])
         # Loss function
         self.cross_entrophy = nn.CrossEntropyLoss(reduction='none')
 
@@ -179,8 +179,33 @@ class S2SPL(LightningModule):
         loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
         self.log('test_loss', loss, on_step=False, on_epoch=True)
 
-    def translate(self, inputs_string):
-        pass
+    def translate(self, input_sentence, max_seq_length=20):
+        # Transfer input string to indice
+        with torch.no_grad():
+            input_indice = []
+            for token in re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()):
+                try:
+                    input_indice.append(self.input_vocab[token])
+                except:
+                    input_indice.append(3)
+            print(re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()))
+            print(input_indice)
+
+            # Transfer indice to LongTensor with batch dimension shape: [1, seq]
+            input_tokens = torch.LongTensor(input_indice).unsqueeze(0).long()
+            input_tokens = input_tokens.to(self.args['DEVICE'])
+
+            teaching = torch.zeros(1, max_seq_length).long()
+            teaching = teaching.to(self.args['DEVICE'])
+
+
+            output_feature = self.forward(input_tokens, teaching = teaching, teaching_rate=0)
+            output_indice = torch.argmax(output_feature, dim=2).T.squeeze(0).to(self.args['DEVICE'])
+            output_sentence = [self.target_id_to_word[int(i)] for i in output_indice]
+            print(output_sentence)
+        return output_sentence
+
+
 
     # def training_step(self, train_batch, batch_idx):
     #     inputs, targets, teaching, masks = train_batch
