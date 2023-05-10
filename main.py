@@ -11,10 +11,10 @@ from tensorboard import program
 
 
 if __name__ == "__main__":
-    tb = program.TensorBoard()
-    tb.configure(argv=[None, '--logdir', 'tb_logs'])
-    url = tb.launch()
-    print(f"Tensorflow listening on {url}")
+    # tb = program.TensorBoard()
+    # tb.configure(argv=[None, '--logdir', 'tb_logs'])
+    # url = tb.launch()
+    # print(f"Tensorflow listening on {url}")
 
     # Initial Dataset
     trainset = en_de_dataset(split='train', pair=args['PAIR'])
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     # Saving config as json
 
     # Training
-    trainer = Trainer(precision=16, max_epochs=args['EPOCHS'], callbacks=[checkpoint_callback, checkpoint_callback_train], logger=tb_logger)
+    trainer = Trainer(accelerator="auto", devices="auto", strategy="auto", precision=16, max_epochs=args['EPOCHS'], callbacks=[checkpoint_callback, checkpoint_callback_train], logger=tb_logger)
     trainer.fit(s2s_model, train_loader, val_loader)
 
     save_config_json(args, f"best/{args_str}")

@@ -22,7 +22,7 @@ args = {
     'BIDIRECTION' : False,
 
     #Dataset
-    'PAIR':('en', 'de'),
+    'PAIR':('de', 'en'),
     # Log
     # 'LOGDIR' : 'tb_logs',
 }
