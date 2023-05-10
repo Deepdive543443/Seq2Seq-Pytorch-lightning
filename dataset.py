@@ -87,11 +87,11 @@ def collate_fn_padding(batch):
 
     # mask for loss
     # mask = torch.zeros_like(batch_target)
-    mask = batch_target != 0
+    # mask = batch_target != 0
     # mask = mask.bool()
 
     # Transfer back to [batch, indice]
-    return batch_inputs, batch_target, batch_teaching, mask
+    return batch_inputs, batch_target, batch_teaching
 
 
 

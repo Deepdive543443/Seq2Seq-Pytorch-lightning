@@ -13,6 +13,9 @@ def German_token():
 def beam_search():
     pass
 
+def target_n_teach():
+    pass
+
 def save_config_json(args, path):
     with open(os.path.join(path, 'config.json'), "w") as outfile:
         json.dump(args, outfile)

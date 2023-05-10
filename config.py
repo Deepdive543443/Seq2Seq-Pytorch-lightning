@@ -1,9 +1,12 @@
 import json
 
 args = {
+    'DEVICE': 'cuda',
+
+
     'BATCH_SIZE' : 128,
-    'LEARNING_RATE' : 3e-4,
-    'EPOCHS' : 600,
+    'LEARNING_RATE' : 1e-3,
+    'EPOCHS' : 50,
 
 
     # Model configuraion
@@ -15,7 +18,7 @@ args = {
     'EMB_DIM' : 150,
     'HIDDEN_ENCODER': 75,
     'HIDDEN_DECODER': 75,
-    'DROPOUT_ENCODER': 0.2,
-    'DROPOUT_DECODER': 0.2,
+    'DROPOUT_ENCODER': 0.5,
+    'DROPOUT_DECODER': 0.5,
     'BIDIRECTION' : False
 }
