@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from lightning.pytorch import LightningModule
+from torchmetrics import BLEUScore
 import re
 
 
@@ -89,7 +90,7 @@ class RNNDecoder(nn.Module):
         for i in range(1, max_seq_length):
             # Passing the target token if random value is larger than teaching rate
             input = self.dropout(
-                self.emb(x[:,i:i + 1] if random.random() >= teaching_rate else torch.argmax(output_indice, dim=2).T)
+                self.emb(x[:,i:i + 1] if random.random() < teaching_rate else torch.argmax(output_indice, dim=2).T)
             ).permute(1, 0, 2)
 
             output_features, hidden_state = self.rnn(input, hidden_state)
@@ -112,7 +113,12 @@ class S2SPL(LightningModule):
             args
     ):
         super().__init__()
-        self.args = args
+        # self.args = args
+
+        self.lr = args['LEARNING_RATE']
+        self.device_str = args['DEVICE']
+        #self.teach_rate = args['TEACH_RATE']
+        # Vocab
         self.input_vocab = input_vocab
         self.target_vocab = target_vocab
         self.input_id_to_word = input_id_to_word
@@ -121,24 +127,24 @@ class S2SPL(LightningModule):
         # Encoder
         self.encoder = RNNEncoder(
             vocab_size=vocab_size_encoder,
-            embedding_size=self.args['EMB_DIM'],
-            hidden_side=self.args['HIDDEN_ENCODER'],
-            layers=self.args['ENCODER_LAYERS'],
-            bidirection=self.args['BIDIRECTION'],
-            rnn_type=self.args['ENCODER_TYPE'],
-            dropout=self.args['DROPOUT_ENCODER']
-        ).to(self.args['DEVICE'])
+            embedding_size=args['EMB_DIM'],
+            hidden_side=args['HIDDEN_ENCODER'],
+            layers=args['ENCODER_LAYERS'],
+            bidirection=args['BIDIRECTION'],
+            rnn_type=args['ENCODER_TYPE'],
+            dropout=args['DROPOUT_ENCODER']
+        )
         # Decoder
         self.decoder = RNNDecoder(
             vocab_size=vocab_size_decoder,
-            embedding_size=self.args['EMB_DIM'],
-            hidden_side=self.args['HIDDEN_DECODER'],
-            layers=self.args['DECODER_LAYERS'],
-            num_attn_head=self.args['ATTENTION_HEAD'],
-            rnn_type=self.args['DECODER_TYPE'],
-            dropout=self.args['DROPOUT_DECODER'],
-            device=self.args['DEVICE']
-        ).to(self.args['DEVICE'])
+            embedding_size=args['EMB_DIM'],
+            hidden_side=args['HIDDEN_DECODER'],
+            layers=args['DECODER_LAYERS'],
+            num_attn_head=args['ATTENTION_HEAD'],
+            rnn_type=args['DECODER_TYPE'],
+            dropout=args['DROPOUT_DECODER'],
+            device=args['DEVICE']
+        )
         # Loss function
         self.cross_entrophy = nn.CrossEntropyLoss(reduction='none')
 
@@ -148,7 +154,7 @@ class S2SPL(LightningModule):
         self.save_hyperparameters()
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(params=self.parameters(), lr=self.args['LEARNING_RATE'])
+        optimizer = optim.Adam(params=self.parameters(), lr=self.lr)
         return optimizer
 
     def forward(self, inputs, teaching, teaching_rate=0.5):
@@ -157,7 +163,7 @@ class S2SPL(LightningModule):
         return output_dec
 
     def compute_loss(self, inputs, targets, teaching, teaching_rate=0.5):
-        outputs = self.forward(inputs, teaching, teaching_rate=0.5)
+        outputs = self.forward(inputs, teaching, teaching_rate=teaching_rate)
         loss = self.cross_entrophy(outputs.permute(1, 2, 0), targets)[targets != 0]
         loss = loss.mean()
         return loss, outputs
@@ -178,31 +184,39 @@ class S2SPL(LightningModule):
         loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
         self.log('test_loss', loss, on_step=False, on_epoch=True)
 
-    def translate(self, input_sentence, max_seq_length=20):
+    def translate(self, input_sentence, target_sentence, max_seq_length=20):
         # Transfer input string to indice
         with torch.no_grad():
-            input_indice = []
+            input_indice = [1]
             for token in en_tokenizer(input_sentence):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()):
                 try:
                     input_indice.append(self.input_vocab[token])
                 except:
                     input_indice.append(3)
-            print(en_tokenizer(input_sentence))#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()))
-            print(input_indice)
+            # print(en_tokenizer(input_sentence))#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()))
+            input_indice.append(2)
 
             # Transfer indice to LongTensor with batch dimension shape: [1, seq]
             input_tokens = torch.LongTensor(input_indice).unsqueeze(0).long()
-            input_tokens = input_tokens.to(self.args['DEVICE'])
+            input_tokens = input_tokens.to(self.device_str)
 
             teaching = torch.zeros(1, max_seq_length).long()
-            teaching = teaching.to(self.args['DEVICE'])
+            teaching = teaching.to(self.device_str)
 
 
             output_feature = self.forward(input_tokens, teaching = teaching, teaching_rate=0)
-            output_indice = torch.argmax(output_feature, dim=2).T.squeeze(0).to(self.args['DEVICE'])
-            output_sentence = [self.target_id_to_word[int(i)] for i in output_indice]
-            print(output_sentence)
-        return output_sentence
+            output_indice = torch.argmax(output_feature, dim=2).T.squeeze(0).to(self.device_str)
+            output_sentence = []
+            for i in output_indice:
+                if int(i) == 2:
+                    break
+                output_sentence.append(self.target_id_to_word[int(i)])
+
+            # output_sentence = [self.target_id_to_word[int(i)] for i in output_indice]
+            # print(output_sentence)
+
+            bleu = BLEUScore()
+        return ' '.join(output_sentence), bleu([' '.join(output_sentence)], [[target_sentence]]).item()
 
 
 

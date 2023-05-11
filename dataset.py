@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torchtext.datasets import Multi30k
 from torchtext.data.utils import get_tokenizer
@@ -7,8 +8,10 @@ import re, random
 from torch.nn.utils.rnn import pad_sequence
 from utils import *
 
+from copy import deepcopy
+
 class en_de_dataset(Dataset):
-    def __init__(self, split = 'train', pair =('en', 'de'), input_vocab = None, target_vocab = None):
+    def __init__(self, split = 'train', pair =('en', 'de'), min_f = 2, input_vocab = None, target_vocab = None):
         # special token used for
         special_vocab = ['<pad>', '<sos>', '<eos>', '<unk>']
 
@@ -31,26 +34,51 @@ class en_de_dataset(Dataset):
                 # sen2_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_sen.lower())
 
         if input_vocab is None:
-            self.input_vocab = Counter(sen1_token)
-            self.input_vocab = special_vocab + [k for k, _ in self.input_vocab.items()]
+            input_count = Counter(sen1_token)
+            self.input_vocab = []
+            for k, v in input_count.items():
+                if v>= min_f:
+                    self.input_vocab.append(k)
+            self.input_vocab = special_vocab + self.input_vocab
             self.input_vocab = {token: idx for idx, token in enumerate(self.input_vocab)}
         else:
             self.input_vocab = input_vocab
 
         if target_vocab is None:
-            self.target_vocab = Counter(sen2_token)
-            self.target_vocab = special_vocab + [k for k, _ in self.target_vocab.items()]
+            target_count = Counter(sen2_token)
+            self.target_vocab = []
+            for k, v in target_count.items():
+                if v >= min_f:
+                    self.target_vocab.append(k)
+            self.target_vocab = special_vocab + self.target_vocab
             self.target_vocab = {token: idx for idx, token in enumerate(self.target_vocab)}
         else:
             self.target_vocab = target_vocab
+
+        # if input_vocab is None:
+        #     self.input_vocab = Counter(sen1_token)
+        #     self.input_vocab = special_vocab + [k for k, _ in self.input_vocab.items()]
+        #     self.input_vocab = {token: idx for idx, token in enumerate(self.input_vocab)}
+        # else:
+        #     self.input_vocab = input_vocab
+        #
+        # if target_vocab is None:
+        #     self.target_vocab = Counter(sen2_token)
+        #     self.target_vocab = special_vocab + [k for k, _ in self.target_vocab.items()]
+        #     self.target_vocab = {token: idx for idx, token in enumerate(self.target_vocab)}
+        # else:
+        #     self.target_vocab = target_vocab
 
         self.id_to_word_input = {v: k for k, v in self.input_vocab.items()}
         self.id_to_word_target = {v: k for k, v in self.target_vocab.items()}
         print(f"Input vocab size: {len(self.input_vocab)}")
         print(f"Target vocab size: {len(self.target_vocab)}")
 
+        # print(f"Input vocab size: {self.input_vocab}")
+        # print(f"Target vocab size: {self.target_vocab}")
+
     def random_pairs(self):
-        pair_idx = random.randint(0, len(self.inputs))
+        pair_idx = random.randint(0, len(self.inputs) - 1)
         return self.inputs[pair_idx], self.targets[pair_idx]
 
     def __len__(self):
@@ -75,28 +103,36 @@ class en_de_dataset(Dataset):
         input_indice.append(2)
         return torch.LongTensor(input_indice).unsqueeze(1), torch.LongTensor(target_indice).unsqueeze(1)
 
+def mask_end_or_start(batched_indices, mode):
+    if mode == 'teaching':
+        mask = batched_indices == 2
+        batched_indices_copy = deepcopy(batched_indices)
+        batched_indices_copy[mask] = 0
+        batched_indices_copy = batched_indices_copy[:, :-1]
+    elif mode == 'target':
+        batched_indices_copy = deepcopy(batched_indices)
+        batched_indices_copy = batched_indices_copy[:,1:]
+    else:
+        print("Didn't send in the required mode")
+
+    return batched_indices_copy
+
 def collate_fn_padding(batch):
     # Each item in batch (input, target)
     inputs_batch = []
     target_batch = []
-    teaching_batch = []
+
     for input, target in batch:
         inputs_batch.append(input)
-        target_batch.append(target[1:])
-        teaching_batch.append(target[:-1])
+        target_batch.append(target)
+        # teaching_batch.append(target[:-1])
 
     # Merge list of sentences into a batch with padding
     batch_inputs = pad_sequence(inputs_batch, padding_value=0).permute(1, 0, 2).squeeze(-1)
     batch_target = pad_sequence(target_batch, padding_value=0).permute(1, 0, 2).squeeze(-1) # [seq, batch, unsqueezed]
-    batch_teaching = pad_sequence(teaching_batch, padding_value=0).permute(1, 0, 2).squeeze(-1)
-
-    # mask for loss
-    # mask = torch.zeros_like(batch_target)
-    # mask = batch_target != 0
-    # mask = mask.bool()
 
     # Transfer back to [batch, indice]
-    return batch_inputs, batch_target, batch_teaching
+    return batch_inputs, mask_end_or_start(batch_target, mode='target'), mask_end_or_start(batch_target, mode='teaching')  #batch_target[:, 1:], batch_teaching
 
 
 
