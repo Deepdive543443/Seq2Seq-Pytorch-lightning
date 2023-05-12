@@ -17,7 +17,11 @@ class en_de_dataset(Dataset):
 
         sen1_token = []
         sen2_token = []
+        self.input_tokenizer = get_tokenizer('spacy', language=pair[0])
+        self.target_tokenizer = get_tokenizer('spacy', language=pair[1])
         sentences_pair = Multi30k(split=(split), language_pair=pair)
+
+
 
         self.length = 0
         self.inputs = []
@@ -28,8 +32,8 @@ class en_de_dataset(Dataset):
                 self.length += 1
                 self.inputs.append(input_sen)
                 self.targets.append(target_sen)
-                sen1_token += en_tokenizer(input_sen)#English_token(input_sen)
-                sen2_token += de_tokenizer(target_sen)#German_token(target_sen)
+                sen1_token += self.input_tokenizer(input_sen)#English_token(input_sen)
+                sen2_token += self.target_tokenizer(target_sen)#German_token(target_sen)
                 # sen1_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sen.lower())
                 # sen2_token += re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', target_sen.lower())
 
@@ -87,13 +91,13 @@ class en_de_dataset(Dataset):
     def __getitem__(self, item):
         input_indice = [1]
         target_indice = [1]
-        for token in en_tokenizer(self.inputs[item]):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.inputs[item].lower()):
+        for token in self.input_tokenizer(self.inputs[item]):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.inputs[item].lower()):
             try:
                 input_indice.append(self.input_vocab[token])
             except:
                 input_indice.append(self.input_vocab['<unk>'])
 
-        for token in de_tokenizer(self.targets[item]):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.targets[item].lower()):
+        for token in self.target_tokenizer(self.targets[item]):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', self.targets[item].lower()):
             try:
                 target_indice.append(self.target_vocab[token])
             except:
@@ -104,6 +108,13 @@ class en_de_dataset(Dataset):
         return torch.LongTensor(input_indice).unsqueeze(1), torch.LongTensor(target_indice).unsqueeze(1)
 
 def mask_end_or_start(batched_indices, mode):
+    '''
+    Mask a batch of sentences with <sos> and <eos>
+
+    :param batched_indices:
+    :param mode:
+    :return:
+    '''
     if mode == 'teaching':
         mask = batched_indices == 2
         batched_indices_copy = deepcopy(batched_indices)
@@ -132,13 +143,14 @@ def collate_fn_padding(batch):
     batch_target = pad_sequence(target_batch, padding_value=0).permute(1, 0, 2).squeeze(-1) # [seq, batch, unsqueezed]
 
     # Transfer back to [batch, indice]
-    return batch_inputs, mask_end_or_start(batch_target, mode='target'), mask_end_or_start(batch_target, mode='teaching')  #batch_target[:, 1:], batch_teaching
+    return batch_inputs, batch_target#mask_end_or_start(batch_target, mode='target'), mask_end_or_start(batch_target, mode='teaching')  #batch_target[:, 1:], batch_teaching
 
 
 
 if __name__ == '__main__':
+    from config import args
     batch_size = 2
-    trainset = en_de_dataset(split='valid')
+    trainset = en_de_dataset(split='valid', pair=args['PAIR'])
     train_loader = DataLoader(
         dataset=trainset,
         shuffle=False,
@@ -149,10 +161,10 @@ if __name__ == '__main__':
     )
     print(len(trainset))
 
-    for idx, (input, target, teaching) in enumerate(train_loader):
+    for idx, (input, target) in enumerate(train_loader):
         print(input.shape, target.shape)
 
-        for idx, (sen1, sen2, sen3) in enumerate(zip(input, target, teaching)):
+        for idx, (sen1, sen2, sen3) in enumerate(zip(input, mask_end_or_start(target, mode='target'), mask_end_or_start(target, mode='teaching'))):
             sen1 = [trainset.id_to_word_input[int(word)] for word in sen1]
             sen2 = [trainset.id_to_word_target[int(word)] for word in sen2]
             sen3 = [trainset.id_to_word_target[int(word)] for word in sen3]

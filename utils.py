@@ -6,6 +6,8 @@ from tensorboard import program
 from pytorch_lightning import callbacks
 
 
+
+
 en_tokenizer = get_tokenizer('spacy', language='en')
 de_tokenizer = get_tokenizer('spacy', language='de')
 
@@ -17,7 +19,7 @@ class print_example_callback(Callback):
 
 
     def on_train_epoch_end(self, trainer, pl_module):
-        print('Training result')
+        print('\nTraining result')
         input_pair, target_pair = self.trainset.random_pairs()
         translated_sentences, bleu_score = pl_module.translate(input_pair, target_pair)
         print(f"Input: {input_pair}\nTarget: {target_pair}\nTranslate: {translated_sentences}\nBLEU: {bleu_score}\n")
@@ -35,7 +37,7 @@ def launch_tensorboard(tracking_address):
     # be stopped once the main process is stopped.
     try:
         tb = program.TensorBoard()
-        tb.configure(argv=[None, '--logdir', tracking_address])
+        tb.configure(argv=[None, '--logdir', tracking_address, '--port', '8008'])
         url = tb.launch()
         if url.endswith("/"):
             url = url[:-1]

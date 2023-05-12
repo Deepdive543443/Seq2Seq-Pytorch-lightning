@@ -1,11 +1,12 @@
-import random
+import random, math
 from utils import *
+from dataset import mask_end_or_start
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from lightning.pytorch import LightningModule
 from torchmetrics import BLEUScore
-import re
+from torchtext.data.utils import get_tokenizer
 
 
 class RNNEncoder(nn.Module):
@@ -33,7 +34,8 @@ class RNNEncoder(nn.Module):
 
         self.bidirection = bidirection
         if self.bidirection:
-            self.linear = nn.Linear(embedding_size * 2, embedding_size)
+            self.output_reduce = nn.Linear(hidden_side * 2, hidden_side)
+            self.hidden_reduce = nn.Linear(hidden_side * 2, hidden_side)
 
     def forward(self, x):
         x = self.dropout(self.emb(x)).permute(1, 0, 2) # [batch, seq, emb] to [seq, batch, emb]
@@ -43,7 +45,10 @@ class RNNEncoder(nn.Module):
 
         # Map to previous nums of features
         if self.bidirection:
-            output = self.linear(output)
+            output = self.output_reduce(output)
+            # hidden_state = self.hidden_reduce(hidden_state)
+
+
         return output, hidden_state
 
 
@@ -55,7 +60,7 @@ class RNNDecoder(nn.Module):
         self.emb = nn.Embedding(vocab_size, embedding_size)
         if rnn_type == 'GRU':
             self.rnn = nn.GRU(
-                input_size=embedding_size,
+                input_size=embedding_size + hidden_side,
                 hidden_size=hidden_side,
                 num_layers=layers,
                 dropout=dropout
@@ -69,22 +74,38 @@ class RNNDecoder(nn.Module):
             )
 
         self.dropout = nn.Dropout(p=dropout)
+        self.softmax = nn.Softmax(dim=2)
 
         self.decode = nn.Linear(hidden_side, vocab_size)
 
-    def forward(self, x, encoder_output, encoder_hidden_state, max_seq_length=20, teaching_rate=0.5):
+    def scaled_dot_attn(self, query, key, value, input_indice):
+        input_indice_ext = input_indice.unsqueeze(1).repeat(1, query.shape[0], 1) # [batch, seq_enc] -> [batch, seq_dec, seq_enc]
+        query = query.permute(1, 0, 2) # [seq_dec, batch, features] -> [batch, seq_dec, features]
+        key = key.permute(1, 2, 0) # [seq_enc, batch, features] -> [batch, features, seq_enc]
+        value =  value.permute(1, 0, 2)
+
+        # Getting attention score with mask
+        score = torch.bmm(query, key) / math.sqrt(query.shape[1]) # [batch, seq_dec, seq_enc]
+        score[input_indice_ext == 0] = -9e3
+        score = self.softmax(score)
+
+        # Matmal with output
+        attn_output = torch.bmm(score, value)
+        return attn_output.permute(1, 0, 2)
+
+
+
+    def forward(self, x, encoder_output, input_indice, encoder_hidden_state, max_seq_length=20, teaching_rate=0.5):
         outputs_indices = []
-        seq_length = 0
-        #
-        # send in the <start_of_seq>
-        start_of_seq = torch.ones(x.shape[0], 1).long()
-        start_of_seq = start_of_seq.to(self.device)
-        start_of_seq = self.dropout(self.emb(start_of_seq)).permute(1, 0, 2)
-        output_features, hidden_state = self.rnn(start_of_seq, encoder_hidden_state)
+        start_of_seq = x[:,0:1]
+        start_of_seq = self.dropout(self.emb(start_of_seq)).permute(1, 0, 2) # [seq, batch, features]
+        output_features, hidden_state = self.rnn(torch.cat([encoder_output[-1].unsqueeze(0), start_of_seq], dim=2), encoder_hidden_state)
+        # output_features, hidden_state = self.rnn(torch.cat([encoder_output[(input_indice == 2).T].unsqueeze(0), start_of_seq], dim=2), encoder_hidden_state)
 
         # Obtain the indice for next seq
         output_indice = self.decode(output_features)
         outputs_indices.append(output_indice)
+        output_features = self.scaled_dot_attn(output_features, encoder_output, encoder_output, input_indice)
 
         # Recursively
         for i in range(1, max_seq_length):
@@ -93,10 +114,11 @@ class RNNDecoder(nn.Module):
                 self.emb(x[:,i:i + 1] if random.random() < teaching_rate else torch.argmax(output_indice, dim=2).T)
             ).permute(1, 0, 2)
 
-            output_features, hidden_state = self.rnn(input, hidden_state)
+            output_features, hidden_state = self.rnn(torch.cat([output_features, input], dim=2), hidden_state)
             output_indice = self.decode(output_features)
             outputs_indices.append(output_indice)
-
+            output_features = self.scaled_dot_attn(output_features, encoder_output, encoder_output, input_indice)
+            # self.scaled_dot_attn(outputs_indices, encoder_output, encoder_output, input_indice)  #
         return torch.cat(outputs_indices, dim=0)
 
 
@@ -123,6 +145,9 @@ class S2SPL(LightningModule):
         self.target_vocab = target_vocab
         self.input_id_to_word = input_id_to_word
         self.target_id_to_word = target_id_to_word
+
+        self.input_tokenizer = get_tokenizer('spacy', language=args['PAIR'][0])
+        self.target_tokenizer = get_tokenizer('spacy', language=args['PAIR'][1])
 
         # Encoder
         self.encoder = RNNEncoder(
@@ -159,7 +184,14 @@ class S2SPL(LightningModule):
 
     def forward(self, inputs, teaching, teaching_rate=0.5):
         output_enc, hidden_state_enc = self.encoder(inputs)
-        output_dec = self.decoder(x=teaching, encoder_output=output_enc, encoder_hidden_state=hidden_state_enc, max_seq_length=teaching.shape[1], teaching_rate=teaching_rate)
+        output_dec = self.decoder(
+            x=teaching,
+            input_indice = inputs,
+            encoder_output=output_enc,
+            encoder_hidden_state=hidden_state_enc,
+            max_seq_length=teaching.shape[1],
+            teaching_rate=teaching_rate
+        )
         return output_dec
 
     def compute_loss(self, inputs, targets, teaching, teaching_rate=0.5):
@@ -169,26 +201,47 @@ class S2SPL(LightningModule):
         return loss, outputs
 
     def training_step(self, train_batch, batch_idx):
-        inputs, targets, teaching = train_batch
-        loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0.5)
+        # inputs, targets, teaching = train_batch
+        # loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0.5)
+        inputs, targets = train_batch
+        loss, _ = self.compute_loss(
+            inputs,
+            mask_end_or_start(targets, mode='target'),
+            mask_end_or_start(targets, mode='teaching'),
+            teaching_rate=0.5
+        )
         self.log('train_loss', loss, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, valid_batch, batch_idx):
-        inputs, targets, teaching = valid_batch
-        loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
+        # inputs, targets, teaching = valid_batch
+        # loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
+        inputs, targets = valid_batch
+        loss, _ = self.compute_loss(
+            inputs,
+            mask_end_or_start(targets, mode='target'),
+            mask_end_or_start(targets, mode='teaching'),
+            teaching_rate=0.5
+        )
         self.log('valid_loss', loss, on_step=False, on_epoch=True)
 
     def test_step(self, test_batch, batch_idx):
-        inputs, targets, teaching = test_batch
-        loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
+        # inputs, targets, teaching = test_batch
+        # loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
+        inputs, targets = test_batch
+        loss, _ = self.compute_loss(
+            inputs,
+            mask_end_or_start(targets, mode='target'),
+            mask_end_or_start(targets, mode='teaching'),
+            teaching_rate=0.5
+        )
         self.log('test_loss', loss, on_step=False, on_epoch=True)
 
     def translate(self, input_sentence, target_sentence, max_seq_length=20):
         # Transfer input string to indice
         with torch.no_grad():
             input_indice = [1]
-            for token in en_tokenizer(input_sentence):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()):
+            for token in self.input_tokenizer(input_sentence):#re.findall(r'\b[A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß]+\b', input_sentence.lower()):
                 try:
                     input_indice.append(self.input_vocab[token])
                 except:
@@ -200,7 +253,7 @@ class S2SPL(LightningModule):
             input_tokens = torch.LongTensor(input_indice).unsqueeze(0).long()
             input_tokens = input_tokens.to(self.device_str)
 
-            teaching = torch.zeros(1, max_seq_length).long()
+            teaching = torch.ones(1, max_seq_length).long()
             teaching = teaching.to(self.device_str)
 
 

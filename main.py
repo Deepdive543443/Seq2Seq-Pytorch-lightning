@@ -19,19 +19,21 @@ if __name__ == "__main__":
 
     if script_args['tensorboard']:
         url = launch_tensorboard('tb_logs')
-        print(f"Tensorflow listening on {url}")
+        print(f"Tensorboard listening on {url}")
 
     # Initial Dataset
     trainset = en_de_dataset(split='train', pair=args['PAIR'])
     valset = en_de_dataset(
         split='valid',
         input_vocab=trainset.input_vocab,
-        target_vocab=trainset.target_vocab
+        target_vocab=trainset.target_vocab,
+        pair=args['PAIR']
     )
     testset = en_de_dataset(
         split='test',
         input_vocab=trainset.input_vocab,
-        target_vocab=trainset.target_vocab
+        target_vocab=trainset.target_vocab,
+        pair=args['PAIR']
     )
 
     # Dataloader
@@ -55,7 +57,7 @@ if __name__ == "__main__":
         dataset=testset,
         shuffle=False,
         pin_memory=True,
-        batch_size=args['BATCH_SIZE'],
+        batch_size=1,
         collate_fn=collate_fn_padding,
         drop_last=True
     )
@@ -94,7 +96,7 @@ if __name__ == "__main__":
 
     print_progress = print_example_callback(trainset=trainset, testset=testset)
 
-    tb_logger = TensorBoardLogger("tb_logs/", name=f'{args_str}')
+    tb_logger = TensorBoardLogger("tb_logs/", name=f'{args_str}', default_hp_metric= False)
     # Saving config as json
 
     # Training
