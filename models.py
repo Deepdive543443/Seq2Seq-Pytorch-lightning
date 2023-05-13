@@ -35,7 +35,6 @@ class RNNEncoder(nn.Module):
         self.bidirection = bidirection
         if self.bidirection:
             self.output_reduce = nn.Linear(hidden_side * 2, hidden_side)
-            self.hidden_reduce = nn.Linear(hidden_side * 2, hidden_side)
 
     def forward(self, x):
         x = self.dropout(self.emb(x)).permute(1, 0, 2) # [batch, seq, emb] to [seq, batch, emb]
@@ -46,7 +45,6 @@ class RNNEncoder(nn.Module):
         # Map to previous nums of features
         if self.bidirection:
             output = self.output_reduce(output)
-            # hidden_state = self.hidden_reduce(hidden_state)
 
 
         return output, hidden_state
@@ -139,7 +137,8 @@ class S2SPL(LightningModule):
 
         self.lr = args['LEARNING_RATE']
         self.device_str = args['DEVICE']
-        #self.teach_rate = args['TEACH_RATE']
+        self.teach_rate = args['TEACH_RATE']
+
         # Vocab
         self.input_vocab = input_vocab
         self.target_vocab = target_vocab
@@ -201,39 +200,33 @@ class S2SPL(LightningModule):
         return loss, outputs
 
     def training_step(self, train_batch, batch_idx):
-        # inputs, targets, teaching = train_batch
-        # loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0.5)
         inputs, targets = train_batch
         loss, _ = self.compute_loss(
             inputs,
             mask_end_or_start(targets, mode='target'),
             mask_end_or_start(targets, mode='teaching'),
-            teaching_rate=0.5
+            teaching_rate=self.teach_rate
         )
-        self.log('train_loss', loss, on_step=False, on_epoch=True)
+        self.log('train_loss', loss, on_step=True, prog_bar=True)
         return loss
 
     def validation_step(self, valid_batch, batch_idx):
-        # inputs, targets, teaching = valid_batch
-        # loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
         inputs, targets = valid_batch
         loss, _ = self.compute_loss(
             inputs,
             mask_end_or_start(targets, mode='target'),
             mask_end_or_start(targets, mode='teaching'),
-            teaching_rate=0.5
+            teaching_rate=0
         )
-        self.log('valid_loss', loss, on_step=False, on_epoch=True)
+        self.log('valid_loss', loss, on_step=True, prog_bar=True)
 
     def test_step(self, test_batch, batch_idx):
-        # inputs, targets, teaching = test_batch
-        # loss, _ = self.compute_loss(inputs, targets, teaching, teaching_rate=0)
         inputs, targets = test_batch
         loss, _ = self.compute_loss(
             inputs,
             mask_end_or_start(targets, mode='target'),
             mask_end_or_start(targets, mode='teaching'),
-            teaching_rate=0.5
+            teaching_rate=0
         )
         self.log('test_loss', loss, on_step=False, on_epoch=True)
 

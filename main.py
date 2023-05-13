@@ -75,7 +75,7 @@ if __name__ == "__main__":
     )
 
     # Transfer model parameters to check point
-    args_str = " ".join([str(k)+str(v) for k, v in args.items()])
+    args_str = "".join([str(k)+str(v) for k, v in args.items()])
 
     #Saving best model on validation
     checkpoint_callback = ModelCheckpoint(
@@ -94,13 +94,19 @@ if __name__ == "__main__":
         filename="-{epoch:02d}-{train_loss:.2f}-training",
     )
 
+    # progress_bar = MyProgressBar()
+    progress_bar = KstyleBar(bar_length=30, args=args, train_stat=['train_loss'], val_stat=['valid_loss_step'], test_stat=[])
+
     print_progress = print_example_callback(trainset=trainset, testset=testset)
 
     tb_logger = TensorBoardLogger("tb_logs/", name=f'{args_str}', default_hp_metric= False)
     # Saving config as json
 
     # Training
-    trainer = Trainer(accelerator="auto", devices="auto", strategy="auto", precision=16, max_epochs=args['EPOCHS'], callbacks=[checkpoint_callback, checkpoint_callback_train, print_progress], logger=tb_logger)
+    trainer = Trainer(
+        accelerator="auto", devices="auto", strategy="auto", precision=16, max_epochs=args['EPOCHS'],
+        callbacks=[progress_bar, checkpoint_callback, checkpoint_callback_train, print_progress], logger=tb_logger
+    )
     trainer.fit(s2s_model, train_loader, val_loader)
 
     save_config_json(args, f"best/{args_str}")

@@ -19,6 +19,17 @@ class en_de_dataset(Dataset):
         sen2_token = []
         self.input_tokenizer = get_tokenizer('spacy', language=pair[0])
         self.target_tokenizer = get_tokenizer('spacy', language=pair[1])
+        # if pair[0] == 'en':
+        #     self.input_tokenizer = en_tokenizer
+        # elif pair[0] == 'de':
+        #     self.input_tokenizer = de_tokenizer
+        #
+        # if pair[1] == 'en':
+        #     self.target_tokenizer = en_tokenizer
+        # elif pair[1] == 'de':
+        #     self.target_tokenizer = de_tokenizer
+
+        self.target_tokenizer = get_tokenizer('spacy', language=pair[1])
         sentences_pair = Multi30k(split=(split), language_pair=pair)
 
 
@@ -59,19 +70,6 @@ class en_de_dataset(Dataset):
         else:
             self.target_vocab = target_vocab
 
-        # if input_vocab is None:
-        #     self.input_vocab = Counter(sen1_token)
-        #     self.input_vocab = special_vocab + [k for k, _ in self.input_vocab.items()]
-        #     self.input_vocab = {token: idx for idx, token in enumerate(self.input_vocab)}
-        # else:
-        #     self.input_vocab = input_vocab
-        #
-        # if target_vocab is None:
-        #     self.target_vocab = Counter(sen2_token)
-        #     self.target_vocab = special_vocab + [k for k, _ in self.target_vocab.items()]
-        #     self.target_vocab = {token: idx for idx, token in enumerate(self.target_vocab)}
-        # else:
-        #     self.target_vocab = target_vocab
 
         self.id_to_word_input = {v: k for k, v in self.input_vocab.items()}
         self.id_to_word_target = {v: k for k, v in self.target_vocab.items()}
