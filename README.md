@@ -1,4 +1,2 @@
 # lightning_test
-Learn to use Pytorch lightning
-
-Under construction...
+A seq2seq with attention implementation in Pytorch lightning
